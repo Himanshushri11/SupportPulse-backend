@@ -20,7 +20,7 @@ const PRIORITY_COLORS = {
 
 class NotificationService {
   constructor() {
-    this.brevoApiKey = config.email.brevoApiKey || '';
+    this.brevoApiKey = (config.email && config.email.brevoApiKey) || process.env.BREVO_API_KEY || '';
     this.brevoApiUrl = 'https://api.brevo.com/v3/smtp/email';
     this.senderName = 'SupportPulse Support';
     this.senderEmail = 'support@yourdomain.com';

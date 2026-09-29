@@ -26,6 +26,7 @@ const config = {
     from: process.env.SMTP_FROM || process.env.EMAIL_FROM || 'Email Support System <support@yourdomain.com>',
     adminSupportEmail: process.env.ADMIN_SUPPORT_EMAIL || 'admin@yourdomain.com',
     webhookSecret: process.env.EMAIL_WEBHOOK_SECRET || 'dev_webhook_shared_secret_999',
+    brevoApiKey: process.env.BREVO_API_KEY || '',
     smtp: {
       host: process.env.SMTP_HOST || '',
       port: parseInt(process.env.SMTP_PORT || '587', 10),
