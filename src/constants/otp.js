@@ -1,0 +1,11 @@
+const OtpPurpose = Object.freeze({
+  EMAIL_VERIFICATION: 'EMAIL_VERIFICATION',
+  PHONE_VERIFICATION: 'PHONE_VERIFICATION',
+  EMAIL_LOGIN: 'EMAIL_LOGIN',
+  PHONE_LOGIN: 'PHONE_LOGIN',
+  PASSWORD_RESET: 'PASSWORD_RESET',
+});
+
+module.exports = {
+  OtpPurpose,
+};

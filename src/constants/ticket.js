@@ -1,0 +1,70 @@
+const TicketStatus = Object.freeze({
+  OPEN: 'OPEN',
+  IN_PROGRESS: 'IN_PROGRESS',
+  PENDING: 'PENDING',
+  RESOLVED: 'RESOLVED',
+  CLOSED: 'CLOSED',
+  REOPENED: 'REOPENED',
+});
+
+const TicketPriority = Object.freeze({
+  LOW: 'LOW',
+  MEDIUM: 'MEDIUM',
+  HIGH: 'HIGH',
+  URGENT: 'URGENT',
+});
+
+const MessageType = Object.freeze({
+  PUBLIC: 'PUBLIC',
+  INTERNAL: 'INTERNAL',
+});
+
+const MessageSource = Object.freeze({
+  WEB: 'WEB',
+  EMAIL: 'EMAIL',
+  SYSTEM: 'SYSTEM',
+});
+
+const ActivityAction = Object.freeze({
+  TICKET_CREATED: 'TICKET_CREATED',
+  TICKET_ASSIGNED: 'TICKET_ASSIGNED',
+  TICKET_REASSIGNED: 'TICKET_REASSIGNED',
+  STATUS_CHANGED: 'STATUS_CHANGED',
+  PRIORITY_CHANGED: 'PRIORITY_CHANGED',
+  CATEGORY_CHANGED: 'CATEGORY_CHANGED',
+  PUBLIC_REPLY_ADDED: 'PUBLIC_REPLY_ADDED',
+  INTERNAL_NOTE_ADDED: 'INTERNAL_NOTE_ADDED',
+  TICKET_RESOLVED: 'TICKET_RESOLVED',
+  TICKET_REOPENED: 'TICKET_REOPENED',
+  TICKET_CLOSED: 'TICKET_CLOSED',
+  // Backward-compatible aliases
+  ASSIGNED: 'TICKET_ASSIGNED',
+  REASSIGNED: 'TICKET_REASSIGNED',
+  PUBLIC_REPLY: 'PUBLIC_REPLY_ADDED',
+  INTERNAL_NOTE: 'INTERNAL_NOTE_ADDED',
+  RESOLVED: 'TICKET_RESOLVED',
+  REOPENED: 'TICKET_REOPENED',
+  CLOSED: 'TICKET_CLOSED',
+});
+
+const EmailDirection = Object.freeze({
+  INBOUND: 'INBOUND',
+  OUTBOUND: 'OUTBOUND',
+});
+
+const EmailEventStatus = Object.freeze({
+  RECEIVED: 'RECEIVED',
+  PROCESSED: 'PROCESSED',
+  FAILED: 'FAILED',
+  DUPLICATE_IGNORED: 'DUPLICATE_IGNORED',
+});
+
+module.exports = {
+  TicketStatus,
+  TicketPriority,
+  MessageType,
+  MessageSource,
+  ActivityAction,
+  EmailDirection,
+  EmailEventStatus,
+};
