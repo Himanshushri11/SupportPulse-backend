@@ -26,10 +26,32 @@ const createApp = () => {
     })
   );
 
+  // Permitted origins for Express CORS (handles trailing slashes & dynamic Vercel domains)
+  const allowedOrigins = [
+    'https://support-pulse-frontend.vercel.app',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+  ];
+
+  if (config.frontendUrl) {
+    const cleanFrontendUrl = config.frontendUrl.replace(/\/+$/, '');
+    if (!allowedOrigins.includes(cleanFrontendUrl)) {
+      allowedOrigins.push(cleanFrontendUrl);
+    }
+  }
+
   // CORS configuration
   app.use(
     cors({
-      origin: [config.frontendUrl, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+      origin: (origin, callback) => {
+        // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+        if (!origin) return callback(null, true);
+        const cleanOrigin = origin.replace(/\/+$/, '');
+        if (allowedOrigins.includes(cleanOrigin) || allowedOrigins.includes(origin)) {
+          return callback(null, true);
+        }
+        return callback(new Error(`CORS policy: origin ${origin} not allowed`));
+      },
       credentials: true,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-webhook-signature'],

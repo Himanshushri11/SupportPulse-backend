@@ -1,71 +1,90 @@
-const nodemailer = require('nodemailer');
+const axios = require('axios');
 const { config } = require('../config');
 const { logger } = require('../utils/logger');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// STATUS / PRIORITY COLOR MAPS (inline CSS for email client compatibility)
-// ─────────────────────────────────────────────────────────────────────────────
 const STATUS_COLORS = {
-  OPEN:        { bg: '#dbeafe', color: '#1d4ed8', border: '#93c5fd' },
+  OPEN: { bg: '#dbeafe', color: '#1d4ed8', border: '#93c5fd' },
   IN_PROGRESS: { bg: '#fef3c7', color: '#92400e', border: '#fcd34d' },
-  PENDING:     { bg: '#ffedd5', color: '#9a3412', border: '#fdba74' },
-  RESOLVED:    { bg: '#dcfce7', color: '#15803d', border: '#86efac' },
-  REOPENED:    { bg: '#fce7f3', color: '#9d174d', border: '#f9a8d4' },
-  CLOSED:      { bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' },
+  PENDING: { bg: '#ffedd5', color: '#9a3412', border: '#fdba74' },
+  RESOLVED: { bg: '#dcfce7', color: '#15803d', border: '#86efac' },
+  REOPENED: { bg: '#fce7f3', color: '#9d174d', border: '#f9a8d4' },
+  CLOSED: { bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' },
 };
 
 const PRIORITY_COLORS = {
   URGENT: { bg: '#fee2e2', color: '#991b1b', border: '#fca5a5' },
-  HIGH:   { bg: '#ffedd5', color: '#9a3412', border: '#fdba74' },
+  HIGH: { bg: '#ffedd5', color: '#9a3412', border: '#fdba74' },
   MEDIUM: { bg: '#fef9c3', color: '#854d0e', border: '#fde047' },
-  LOW:    { bg: '#f0fdf4', color: '#166534', border: '#86efac' },
+  LOW: { bg: '#f0fdf4', color: '#166534', border: '#86efac' },
 };
 
 class NotificationService {
   constructor() {
-    this.transporter = null;
-    this.initTransporter();
-  }
+    this.brevoApiKey = config.email.brevoApiKey || '';
+    this.brevoApiUrl = 'https://api.brevo.com/v3/smtp/email';
+    this.senderName = 'SupportPulse Support';
+    this.senderEmail = 'support@yourdomain.com';
 
-  // ─── Infrastructure ────────────────────────────────────────────────────────
+    this._parseFromAddress();
 
-  initTransporter() {
-    if (config.email.smtp.host && config.email.smtp.user) {
-      this.transporter = nodemailer.createTransport({
-        host: config.email.smtp.host,
-        port: config.email.smtp.port,
-        secure: config.email.smtp.secure,
-        auth: {
-          user: config.email.smtp.user,
-          pass: config.email.smtp.pass,
-        },
-      });
-      // Safe SMTP config dump (NO password)
-      logger.info('[SMTP] Transporter initialized', {
-        host: config.email.smtp.host,
-        port: config.email.smtp.port,
-        secure: config.email.smtp.secure,
-        user: config.email.smtp.user,
-        fromAddress: config.email.from,
+    if (this.brevoApiKey) {
+      logger.info('[Brevo] Email API initialized', {
+        sender: `${this.senderName} <${this.senderEmail}>`,
       });
     } else {
-      logger.warn('[SMTP] Missing SMTP_HOST or SMTP_USER — email sending disabled.');
+      logger.warn('[Brevo] Missing BREVO_API_KEY — email sending disabled.');
+    }
+  }
+
+  _parseFromAddress() {
+    const raw = config.email.from || '';
+    const match = raw.match(/^(.*)<(.+)>$/);
+    if (match) {
+      this.senderName = match[1].trim().replace(/^"|"$/g, '') || 'SupportPulse Support';
+      this.senderEmail = match[2].trim();
+    } else if (raw.includes('@')) {
+      this.senderEmail = raw.trim();
     }
   }
 
   async verifyConnection() {
-    if (!this.transporter) return false;
+    if (!this.brevoApiKey) return false;
     try {
-      await this.transporter.verify();
-      logger.info('SMTP connection verification succeeded.');
+      await axios.get('https://api.brevo.com/v3/account', {
+        headers: { 'api-key': this.brevoApiKey },
+      });
+      logger.info('Brevo API key verified successfully.');
       return true;
     } catch (err) {
-      logger.error(`SMTP verification failed: ${err.message}`);
+      logger.error(`Brevo API verification failed: ${err.response?.data?.message || err.message}`);
       return false;
     }
   }
 
-  /** Prevent HTML injection in all user-supplied values */
+  async _sendMail({ to, subject, html }) {
+    if (!this.brevoApiKey) {
+      throw new Error('BREVO_API_KEY is not configured. Cannot send email.');
+    }
+
+    const payload = {
+      sender: { name: this.senderName, email: this.senderEmail },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html,
+    };
+
+    const response = await axios.post(this.brevoApiUrl, payload, {
+      headers: {
+        'api-key': this.brevoApiKey,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      timeout: 15000,
+    });
+
+    return response.data;
+  }
+
   s(value) {
     if (value === null || value === undefined) return '';
     return String(value)
@@ -76,12 +95,6 @@ class NotificationService {
       .replace(/'/g, '&#039;');
   }
 
-  // ─── Template Helpers ──────────────────────────────────────────────────────
-
-  /**
-   * Consistent subject line format:
-   * [SupportPulse] [TKT-2026-000510] Event — Subject title
-   */
   buildSubject(ticketNumber, event, ticketTitle) {
     const num = this.s(ticketNumber || 'N/A');
     const title = this.s(ticketTitle || 'Support Request');
@@ -90,7 +103,6 @@ class NotificationService {
       : `[SupportPulse] [${num}] ${title}`;
   }
 
-  /** Colored inline badge (email-safe, inline CSS) */
   getStatusBadge(status) {
     const c = STATUS_COLORS[String(status).toUpperCase()] || { bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' };
     return `<span style="display:inline-block;padding:3px 10px;border-radius:9999px;font-size:12px;font-weight:700;background:${c.bg};color:${c.color};border:1px solid ${c.border};">${this.s(status)}</span>`;
@@ -101,9 +113,6 @@ class NotificationService {
     return `<span style="display:inline-block;padding:3px 10px;border-radius:9999px;font-size:12px;font-weight:700;background:${c.bg};color:${c.color};border:1px solid ${c.border};">${this.s(priority)}</span>`;
   }
 
-  /**
-   * Dark branded email header with event title.
-   */
   getEmailHeader(eventTitle) {
     return `
     <div style="background:#0f172a;border-radius:12px 12px 0 0;padding:28px 32px 24px;text-align:center;">
@@ -112,10 +121,6 @@ class NotificationService {
     </div>`;
   }
 
-  /**
-   * Two-column ticket summary card.
-   * @param {Array<{label, value, raw}>} fields — raw=true skips escaping (for badges)
-   */
   getTicketSummaryCard(fields) {
     const rows = fields
       .filter((f) => f.value !== undefined && f.value !== null && f.value !== '')
@@ -140,11 +145,6 @@ class NotificationService {
     </div>`;
   }
 
-  /**
-   * Latest update / reply box.
-   * @param {string} label  e.g. "Latest Reply", "Assignment Update", "Status Update"
-   * @param {string} html   pre-escaped or raw html content for the body
-   */
   getUpdateSection(label, html) {
     return `
     <div style="margin:20px 0;">
@@ -153,7 +153,6 @@ class NotificationService {
     </div>`;
   }
 
-  /** Primary CTA button linking to the ticket in the frontend. */
   getViewTicketButton(ticketId) {
     if (!ticketId || !config.frontendUrl) return '';
     const url = `${config.frontendUrl}/tickets/${ticketId}`;
@@ -163,7 +162,6 @@ class NotificationService {
     </div>`;
   }
 
-  /** Consistent email footer. */
   getEmailFooter(ticketNumber) {
     const year = new Date().getFullYear();
     const num = ticketNumber ? `<div style="margin-top:6px;font-size:11px;color:#94a3b8;font-family:'Courier New',monospace;font-weight:700;">${this.s(ticketNumber)}</div>` : '';
@@ -176,10 +174,6 @@ class NotificationService {
     </div>`;
   }
 
-  /**
-   * Master email composer.
-   * Produces the full HTML document from header + card + update section + button + footer.
-   */
   composeEmail({
     eventTitle,
     greeting = '',
@@ -234,12 +228,6 @@ class NotificationService {
 </html>`;
   }
 
-  // ─── OTP / Auth Emails (unchanged — separate concern) ─────────────────────
-
-  /**
-   * OTP / Authentication email template (dark theme, code box).
-   * Signature preserved exactly for auth flow compatibility.
-   */
   getEmailTemplate({ title, greeting, message, code, subtext }) {
     const s = (v) => this.s(v);
     const safeSubtext = s(subtext || 'This code is valid for 10 minutes. If you did not make this request, you can safely ignore this email.');
@@ -280,10 +268,6 @@ class NotificationService {
 </html>`;
   }
 
-  /**
-   * Send Email OTP — unchanged signature, unchanged behaviour.
-   * Logs full safe SMTP result (never logs OTP or credentials).
-   */
   async sendEmailOtp({ email, otp, purpose }) {
     let title = 'Verification Code';
     let greeting = 'Verify Your Email';
@@ -301,88 +285,48 @@ class NotificationService {
 
     const html = this.getEmailTemplate({ title, greeting, message, code: otp });
 
-    if (!this.transporter) {
-      const msg = 'SMTP configuration missing. Cannot send OTP email.';
+    if (!this.brevoApiKey) {
+      const msg = 'Brevo API key missing. Cannot send OTP email.';
       logger.error(msg);
       throw new Error(msg);
     }
 
-    const mailOptions = {
-      from: config.email.from,
-      to: email,
-      subject: `[SupportPulse] ${title}`,
-      html,
-    };
-
-    // Log what we are about to send (no OTP value in body)
-    logger.info('[SMTP] Sending OTP email', {
-      from: mailOptions.from,
-      to: mailOptions.to,
-      subject: mailOptions.subject,
-    });
+    logger.info('[Brevo] Sending OTP email', { to: email, subject: `[SupportPulse] ${title}` });
 
     try {
-      const result = await this.transporter.sendMail(mailOptions);
-
-      // Log the COMPLETE safe SMTP result — never log OTP or credentials
-      logger.info('[SMTP] sendMail result', {
-        messageId: result.messageId,
-        accepted:  result.accepted,
-        rejected:  result.rejected,
-        response:  result.response,
-        envelope:  result.envelope,
+      const result = await this._sendMail({
+        to: email,
+        subject: `[SupportPulse] ${title}`,
+        html,
       });
 
-      const wasAccepted = Array.isArray(result.accepted) && result.accepted.length > 0;
-      const wasRejected = Array.isArray(result.rejected) && result.rejected.length > 0;
-
-      if (wasRejected && !wasAccepted) {
-        logger.error(`[SMTP] Recipient REJECTED by SMTP server: ${JSON.stringify(result.rejected)}`);
-        throw new Error('Recipient rejected by mail server.');
-      }
-
-      if (wasAccepted) {
-        logger.info(`[SMTP] Authentication email successfully delivered to SMTP for: ${result.accepted.join(', ')}`);
-      } else {
-        logger.warn(`[SMTP] sendMail resolved but accepted list is empty. Result: ${JSON.stringify({ accepted: result.accepted, rejected: result.rejected, response: result.response })}`);
-      }
-
+      logger.info('[Brevo] OTP email accepted', { to: email, messageId: result.messageId });
       return true;
     } catch (err) {
-      logger.error(`[SMTP] sendMail FAILED for ${email}`, {
-        errorMessage: err.message,
-        errorCode: err.code,
-        errorCommand: err.command,
-        responseCode: err.responseCode,
-        response: err.response,
+      logger.error(`[Brevo] Failed to send OTP email to ${email}`, {
+        errorMessage: err.response?.data?.message || err.message,
+        status: err.response?.status,
       });
       throw new Error('Failed to send verification email. Please try again later.');
     }
   }
 
-  // ─── Shared Ticket Data Helpers ────────────────────────────────────────────
-
-  /**
-   * Build the standard summary fields for a ticket.
-   * Pass override fields to add/replace entries.
-   */
   _getTicketFields(ticket, customer, overrides = {}) {
     const ts = (d) => d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
 
     const base = {
-      'Ticket ID':     ticket.ticketNumber || 'N/A',
-      'Subject':       ticket.title || ticket.subject || 'N/A',
-      'Status':        { raw: true, value: this.getStatusBadge(ticket.status || 'OPEN') },
-      'Priority':      { raw: true, value: this.getPriorityBadge(ticket.priority || 'MEDIUM') },
-      'Category':      ticket.category?.name || 'General',
-      'Customer':      customer?.fullName || 'N/A',
-      'Customer Email':customer?.email || 'N/A',
-      'Assigned Agent':ticket.assignedTo?.fullName || 'Unassigned',
-      'Created':       ts(ticket.createdAt),
-      'Last Updated':  ts(ticket.updatedAt),
+      'Ticket ID': ticket.ticketNumber || 'N/A',
+      'Subject': ticket.title || ticket.subject || 'N/A',
+      'Status': { raw: true, value: this.getStatusBadge(ticket.status || 'OPEN') },
+      'Priority': { raw: true, value: this.getPriorityBadge(ticket.priority || 'MEDIUM') },
+      'Category': ticket.category?.name || 'General',
+      'Customer': customer?.fullName || 'N/A',
+      'Customer Email': customer?.email || 'N/A',
+      'Assigned Agent': ticket.assignedTo?.fullName || 'Unassigned',
+      'Created': ts(ticket.createdAt),
+      'Last Updated': ts(ticket.updatedAt),
     };
 
-    // Apply overrides (add/replace/delete)
     const merged = { ...base, ...overrides };
 
     return Object.entries(merged)
@@ -393,15 +337,12 @@ class NotificationService {
       });
   }
 
-  /** Safely escape a reply body for HTML display, preserving newlines as <br>. */
   _escapeReplyBody(body) {
     return this.s(body || '').replace(/\n/g, '<br>');
   }
 
-  // ─── TICKET CREATION ───────────────────────────────────────────────────────
-
   async sendTicketCreatedToCustomer({ ticket, customer }) {
-    if (!this.transporter || !customer?.email) return false;
+    if (!this.brevoApiKey || !customer?.email) return false;
     const ticketNumber = ticket.ticketNumber || 'N/A';
     const ticketTitle = ticket.title || ticket.subject || 'N/A';
 
@@ -421,8 +362,7 @@ class NotificationService {
     });
 
     try {
-      await this.transporter.sendMail({
-        from: config.email.from,
+      await this._sendMail({
         to: customer.email,
         subject: this.buildSubject(ticketNumber, 'New Ticket', ticketTitle),
         html,
@@ -430,13 +370,13 @@ class NotificationService {
       logger.info(`Ticket confirmation email sent to customer: ${customer.email} (${ticketNumber})`);
       return true;
     } catch (err) {
-      logger.error(`Failed to send ticket confirmation to customer ${customer.email}: ${err.message}`);
+      logger.error(`Failed to send ticket confirmation to customer ${customer.email}: ${err.response?.data?.message || err.message}`);
       return false;
     }
   }
 
   async sendTicketCreatedToAdmin({ ticket, customer }) {
-    if (!this.transporter) return false;
+    if (!this.brevoApiKey) return false;
     const adminEmail = config.email.adminSupportEmail;
     if (!adminEmail) {
       logger.error('ADMIN_SUPPORT_EMAIL not configured. Skipping admin notification.');
@@ -462,8 +402,7 @@ class NotificationService {
     });
 
     try {
-      await this.transporter.sendMail({
-        from: config.email.from,
+      await this._sendMail({
         to: adminEmail,
         subject: this.buildSubject(ticketNumber, 'New Ticket', ticketTitle),
         html,
@@ -471,7 +410,7 @@ class NotificationService {
       logger.info(`New ticket notification sent to admin/support: ${adminEmail} (${ticketNumber})`);
       return true;
     } catch (err) {
-      logger.error(`Failed to send admin ticket notification for ${ticketNumber}: ${err.message}`);
+      logger.error(`Failed to send admin ticket notification for ${ticketNumber}: ${err.response?.data?.message || err.message}`);
       return false;
     }
   }
@@ -488,10 +427,8 @@ class NotificationService {
     return { customerEmailSent: customerSent, adminEmailSent: adminSent };
   }
 
-  // ─── ASSIGNMENT / REASSIGNMENT ─────────────────────────────────────────────
-
   async sendAssignmentToCustomer({ ticket, customer, assignee, isReassignment }) {
-    if (!this.transporter || !customer?.email) return false;
+    if (!this.brevoApiKey || !customer?.email) return false;
     const ticketNumber = ticket.ticketNumber || 'N/A';
     const ticketTitle = ticket.title || ticket.subject || 'N/A';
     const eventWord = isReassignment ? 'Ticket Reassigned' : 'Ticket Assigned';
@@ -511,8 +448,7 @@ class NotificationService {
     });
 
     try {
-      await this.transporter.sendMail({
-        from: config.email.from,
+      await this._sendMail({
         to: customer.email,
         subject: this.buildSubject(ticketNumber, eventWord, ticketTitle),
         html,
@@ -520,13 +456,13 @@ class NotificationService {
       logger.info(`Assignment email sent to customer: ${customer.email} (${ticketNumber})`);
       return true;
     } catch (err) {
-      logger.error(`Failed to send assignment email to customer ${customer.email}: ${err.message}`);
+      logger.error(`Failed to send assignment email to customer ${customer.email}: ${err.response?.data?.message || err.message}`);
       return false;
     }
   }
 
   async sendAssignmentToAgent({ ticket, customer, assignee, isReassignment }) {
-    if (!this.transporter || !assignee?.email) return false;
+    if (!this.brevoApiKey || !assignee?.email) return false;
     const ticketNumber = ticket.ticketNumber || 'N/A';
     const ticketTitle = ticket.title || ticket.subject || 'N/A';
     const eventWord = isReassignment ? 'Ticket Reassigned to You' : 'Ticket Assigned to You';
@@ -545,8 +481,7 @@ class NotificationService {
     });
 
     try {
-      await this.transporter.sendMail({
-        from: config.email.from,
+      await this._sendMail({
         to: assignee.email,
         subject: this.buildSubject(ticketNumber, eventWord, ticketTitle),
         html,
@@ -554,7 +489,7 @@ class NotificationService {
       logger.info(`Assignment email sent to agent: ${assignee.email} (${ticketNumber})`);
       return true;
     } catch (err) {
-      logger.error(`Failed to send assignment email to agent ${assignee.email}: ${err.message}`);
+      logger.error(`Failed to send assignment email to agent ${assignee.email}: ${err.response?.data?.message || err.message}`);
       return false;
     }
   }
@@ -575,7 +510,6 @@ class NotificationService {
       this.sendAssignmentToAgent({ ticket, customer, assignee, isReassignment }),
     ];
 
-    // Admin mailbox — skip if admin IS the assignee to avoid duplicate
     if (adminEmail && adminEmail !== assignee.email) {
       const fields = this._getTicketFields(ticket, customer);
       const adminHtml = this.composeEmail({
@@ -591,8 +525,7 @@ class NotificationService {
       sends.push(
         (async () => {
           try {
-            await this.transporter.sendMail({
-              from: config.email.from,
+            await this._sendMail({
               to: adminEmail,
               subject: this.buildSubject(ticketNumber, `[Admin] ${eventWord}`, ticketTitle),
               html: adminHtml,
@@ -600,7 +533,7 @@ class NotificationService {
             logger.info(`Assignment admin notification sent to ${adminEmail} (${ticketNumber})`);
             return true;
           } catch (err) {
-            logger.error(`Failed to send assignment admin notification for ${ticketNumber}: ${err.message}`);
+            logger.error(`Failed to send assignment admin notification for ${ticketNumber}: ${err.response?.data?.message || err.message}`);
             return false;
           }
         })()
@@ -614,18 +547,13 @@ class NotificationService {
     );
   }
 
-  // ─── REPLY NOTIFICATIONS ───────────────────────────────────────────────────
-
-  /**
-   * Agent/Admin → Customer: PUBLIC reply only. NEVER internal notes.
-   */
   async sendAgentReplyToCustomer({ ticket, customer, replyBody, senderName }) {
-    if (!this.transporter || !customer?.email) return false;
+    if (!this.brevoApiKey || !customer?.email) return false;
     const ticketNumber = ticket.ticketNumber || 'N/A';
     const ticketTitle = ticket.title || ticket.subject || 'N/A';
 
     const fields = this._getTicketFields(ticket, customer, {
-      'Customer': null, 'Customer Email': null, // Remove customer fields from reply
+      'Customer': null, 'Customer Email': null,
     });
 
     const html = this.composeEmail({
@@ -640,8 +568,7 @@ class NotificationService {
     });
 
     try {
-      await this.transporter.sendMail({
-        from: config.email.from,
+      await this._sendMail({
         to: customer.email,
         subject: this.buildSubject(ticketNumber, 'New Reply', ticketTitle),
         html,
@@ -649,15 +576,11 @@ class NotificationService {
       logger.info(`Agent reply email sent to customer: ${customer.email} (${ticketNumber})`);
       return true;
     } catch (err) {
-      logger.error(`Failed to send agent reply email to ${customer.email}: ${err.message}`);
+      logger.error(`Failed to send agent reply email to ${customer.email}: ${err.response?.data?.message || err.message}`);
       return false;
     }
   }
 
-  /**
-   * Orchestrator: Agent/Admin public reply → Customer + Admin mailbox.
-   * INTERNAL NOTES must NEVER be passed here.
-   */
   async sendAgentReplyNotifications({ ticket, customer, replyBody, senderName }) {
     const adminEmail = config.email.adminSupportEmail;
     const ticketNumber = ticket.ticketNumber || 'N/A';
@@ -684,8 +607,7 @@ class NotificationService {
       sends.push(
         (async () => {
           try {
-            await this.transporter.sendMail({
-              from: config.email.from,
+            await this._sendMail({
               to: adminEmail,
               subject: this.buildSubject(ticketNumber, '[Admin] Support Reply', ticketTitle),
               html: adminHtml,
@@ -693,7 +615,7 @@ class NotificationService {
             logger.info(`Agent reply admin copy sent to ${adminEmail} (${ticketNumber})`);
             return true;
           } catch (err) {
-            logger.error(`Failed to send agent reply admin copy for ${ticketNumber}: ${err.message}`);
+            logger.error(`Failed to send agent reply admin copy for ${ticketNumber}: ${err.response?.data?.message || err.message}`);
             return false;
           }
         })()
@@ -707,12 +629,8 @@ class NotificationService {
     );
   }
 
-  /**
-   * Customer → Agent/Admin: notify assigned agent + admin support mailbox.
-   * Never sends back to the customer.
-   */
   async sendCustomerReplyNotifications({ ticket, customer, replyBody, assignedAgent }) {
-    if (!this.transporter) return;
+    if (!this.brevoApiKey) return;
     const ticketNumber = ticket.ticketNumber || 'N/A';
     const ticketTitle = ticket.title || ticket.subject || 'N/A';
     const adminEmail = config.email.adminSupportEmail;
@@ -744,8 +662,7 @@ class NotificationService {
         ticketNumber,
       });
       try {
-        await this.transporter.sendMail({
-          from: config.email.from,
+        await this._sendMail({
           to: email,
           subject: this.buildSubject(ticketNumber, 'Customer Reply', ticketTitle),
           html,
@@ -753,7 +670,7 @@ class NotificationService {
         logger.info(`Customer reply notification sent to ${email} (${ticketNumber})`);
         return true;
       } catch (err) {
-        logger.error(`Failed to send customer reply notification to ${email}: ${err.message}`);
+        logger.error(`Failed to send customer reply notification to ${email}: ${err.response?.data?.message || err.message}`);
         return false;
       }
     });
@@ -761,10 +678,8 @@ class NotificationService {
     await Promise.allSettled(sends);
   }
 
-  // ─── STATUS LIFECYCLE NOTIFICATIONS ───────────────────────────────────────
-
   async sendStatusChangeNotifications({ ticket, customer, newStatus, actor }) {
-    if (!this.transporter) return;
+    if (!this.brevoApiKey) return;
     const ticketNumber = ticket.ticketNumber || 'N/A';
     const ticketTitle = ticket.title || ticket.subject || 'N/A';
     const adminEmail = config.email.adminSupportEmail;
@@ -801,7 +716,6 @@ class NotificationService {
     const fields = this._getTicketFields(ticket, customer);
     const sends = [];
 
-    // Customer notification
     if (customer?.email) {
       const html = this.composeEmail({
         eventTitle: cfg.eventTitle,
@@ -816,8 +730,7 @@ class NotificationService {
       sends.push(
         (async () => {
           try {
-            await this.transporter.sendMail({
-              from: config.email.from,
+            await this._sendMail({
               to: customer.email,
               subject: this.buildSubject(ticketNumber, cfg.eventTitle, ticketTitle),
               html,
@@ -825,14 +738,13 @@ class NotificationService {
             logger.info(`${cfg.eventTitle} email sent to customer: ${customer.email} (${ticketNumber})`);
             return true;
           } catch (err) {
-            logger.error(`Failed to send ${cfg.eventTitle} email to customer ${customer.email}: ${err.message}`);
+            logger.error(`Failed to send ${cfg.eventTitle} email to customer ${customer.email}: ${err.response?.data?.message || err.message}`);
             return false;
           }
         })()
       );
     }
 
-    // Admin notification
     if (adminEmail) {
       const adminHtml = this.composeEmail({
         eventTitle: `[Admin] ${cfg.eventTitle}`,
@@ -847,8 +759,7 @@ class NotificationService {
       sends.push(
         (async () => {
           try {
-            await this.transporter.sendMail({
-              from: config.email.from,
+            await this._sendMail({
               to: adminEmail,
               subject: this.buildSubject(ticketNumber, `[Admin] ${cfg.eventTitle}`, ticketTitle),
               html: adminHtml,
@@ -856,7 +767,7 @@ class NotificationService {
             logger.info(`${cfg.eventTitle} admin email sent to ${adminEmail} (${ticketNumber})`);
             return true;
           } catch (err) {
-            logger.error(`Failed to send ${cfg.eventTitle} admin email for ${ticketNumber}: ${err.message}`);
+            logger.error(`Failed to send ${cfg.eventTitle} admin email for ${ticketNumber}: ${err.response?.data?.message || err.message}`);
             return false;
           }
         })()
@@ -865,8 +776,6 @@ class NotificationService {
 
     await Promise.allSettled(sends);
   }
-
-  // ─── Phone OTP ─────────────────────────────────────────────────────────────
 
   async sendPhoneOtp({ phone, otp, purpose }) {
     let actionText = 'verify your phone number';

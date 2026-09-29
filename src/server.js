@@ -1,3 +1,7 @@
+const dns = require('dns');
+// Fix Windows ISP DNS resolving issue with MongoDB Atlas SRV records
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const http = require('http');
 const { createApp } = require('./app');
 const { config } = require('./config');
@@ -16,9 +20,9 @@ const startServer = async () => {
 
   initSocket(server, config.frontendUrl);
 
-  server.listen(config.port, () => {
-    logger.info(`Server running in ${config.env} mode on http://localhost:${config.port}`);
-    logger.info(`Health check available at http://localhost:${config.port}/api/health`);
+  server.listen(config.port, '0.0.0.0', () => {
+    logger.info(`Server running in ${config.env} mode on port ${config.port}`);
+    logger.info(`Health check available at /api/health`);
   });
 
   const shutdown = (signal) => {
